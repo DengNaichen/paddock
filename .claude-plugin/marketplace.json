@@ -1,0 +1,12 @@
+{
+  "name": "agent-workflow",
+  "owner": { "name": "DengNaichen" },
+  "description": "Worktree + herdr sub-agent workflow for Claude Code.",
+  "plugins": [
+    {
+      "name": "agent-workflow",
+      "source": "./",
+      "description": "wt CLI, skills, and a hook that routes sub-agents through herdr."
+    }
+  ]
+}
