@@ -1,4 +1,4 @@
-# agent-workflow
+# paddock
 
 A small personal workflow for running coding agents in git worktrees inside [herdr](https://herdr.dev).
 
@@ -17,8 +17,8 @@ AGENT.md / CLAUDE.md         contributor notes; CLAUDE.md just imports AGENT.md
 ## Install
 
 ```
-/plugin marketplace add DengNaichen/agent-workflow
-/plugin install agent-workflow@agent-workflow
+/plugin marketplace add DengNaichen/paddock
+/plugin install paddock@paddock
 ```
 
 Requires Claude Code 2.1.91+ (plugin `bin/`).
