@@ -139,14 +139,15 @@ cmd_roles() { # wt roles [check]
     roles_json | jq -r 'to_entries[] | "\(.key)\t\(.value.kind)\t\(.value.model)\t\(.value.effort // "-")\twrite=\(if .value | has("write") then .value.write else true end)\t\(.value.when // "")"'
     return
   fi
-  local d t r=0 res; d=$(mktemp -d); export WT_ROOT=$d/wts
-  git init -q -b main "$d/repo" && git -C "$d/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+  # 在当前（应已被各 agent 信任的）仓库里跑；每个类型一个临时 worktree，测完连分支一起删
+  local t r=0 res
   for t in $(roles_json | jq -r 'to_entries[] | select(.value.enabled != false) | .key'); do
-    if res=$(cd "$d/repo" && WT_TIMEOUT=${WT_TIMEOUT:-180000} cmd_spawn "chk-$t" "$t" "只回答：写出产物，STATUS: ok，并在第二行写你的模型名。不要做其他事。" 2>&1); then
+    if res=$(WT_TIMEOUT=${WT_TIMEOUT:-180000} cmd_spawn "chk-$t" "$t" "只回答：写出产物，STATUS: ok，并在第二行写你的模型名。不要做其他事。" 2>&1); then
       echo "PASS $t"; else echo "FAIL $t: $(echo "$res" | tail -3 | tr '\n' ' ')"; r=1; fi
-    (cd "$d/repo" && cmd_rm "chk-$t" --yes >/dev/null 2>&1) || true
+    cmd_rm "chk-$t" --yes >/dev/null 2>&1 || true
+    git branch -D "chk-$t" >/dev/null 2>&1 || true
   done
-  rm -rf "$d"; return $r
+  return $r
 }
 
 cmd_ls() { herdr agent list | jq -r '.result.agents[] | "\(.name // "-")\t\(.agent)\t\(.agent_status)\t\(.pane_id)\t\(.cwd)"'; }
