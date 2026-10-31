@@ -13,7 +13,7 @@ wt rm    <name> [--yes]                      # preview, then remove (branch kept
 ```
 
 - One task = one worktree = one herdr workspace. Several roles (`impl`, `review`) share the workspace as split panes; the user clicks the workspace to watch them.
-- `wt spawn` appends the result contract to the task, waits, checks `.agent/<role>.md` starts with `STATUS: ok`, retries once, otherwise prints the pane tail and exits 1.
+- `wt spawn` appends the result contract to the task, waits, checks `.agent/<role>.md` starts with `STATUS: ok`, retries once with a fresh agent (original task plus the failed terminal tail), otherwise prints the pane tail and exits 1.
 - Run long spawns with Bash `run_in_background` to be woken on completion.
 - Optional per-repo setup: an executable `.wt/setup` in the repo runs after the worktree is created.
 - Remove only after the user confirms.

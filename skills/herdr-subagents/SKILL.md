@@ -10,13 +10,15 @@ Separate processes: nothing is returned automatically. The protocol is artifact-
 | Native Agent tool | herdr equivalent |
 |---|---|
 | result injected into parent | read `.agent/<role>.md` and the branch commits |
-| SendMessage to continue | `herdr agent prompt <name> ...` (same name keeps context) |
+| SendMessage to continue | not used: every round is a fresh agent (see below) |
 | auto wake-up | run `wt spawn` in background |
+
+Fresh agent every round. `wt spawn` never resumes an agent: it opens a new pane, closes the old agent's pane, confirms the name is free, then starts a new agent. A retry is a fresh agent given the original task plus the tail of the failed round's terminal. This follows poteto-mode's rule that interrupted resumes silently drop directives.
 
 Verified pitfalls:
 
 1. `agent prompt --wait` returns `done` even when the agent errored (e.g. API 400). Trust the artifact, then `herdr pane read <pane> --source visible` for the error.
-2. `claude` asks to trust each new folder. `wt spawn` fails with `agent_not_ready` (agent `blocked`). The user must confirm in the pane; rerunning `wt spawn` reuses the live agent.
+2. `claude` asks to trust each new folder. `wt spawn` fails with `agent_not_ready` (agent `blocked`). The user must confirm in the pane; rerunning `wt spawn` replaces the blocked agent with a fresh one (trust is remembered after the user confirms).
 3. `pi auth check` can say `ready` while the real run fails. Verify with a real request.
 4. Changing agent flags means closing the pane and starting again; there is no in-place switch.
 5. `agent start` needs an existing shell pane; `wt` splits one if none is free.

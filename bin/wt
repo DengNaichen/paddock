@@ -36,31 +36,48 @@ free_pane() { # workspace 里没有 agent 的 pane；没有就 split
   herdr pane split "$root" --direction right --cwd "$(wt_path "$NAME")" --no-focus | jq -r '.result.pane.pane_id'
 }
 
+# 每一轮都起新 agent：先在新 pane 里准备好，再停掉旧的并确认它已退出，最后启动。
+start_fresh() { # start_fresh <agent> <kind> <ws> <root> [agent args...]
+  local agent=$1 kind=$2 ws=$3 root=$4; shift 4
+  local old pane i
+  old=$(herdr agent get "$agent" 2>/dev/null | jq -r '.result.agent.pane_id // empty' || true)
+  pane=$(free_pane "$ws" "$root")
+  if [ -n "$old" ] && [ "$old" != "$pane" ]; then
+    herdr pane close "$old" >/dev/null
+    for i in 1 2 3 4 5 6 7 8 9 10; do herdr agent get "$agent" >/dev/null 2>&1 || break; sleep 0.5; done
+    if herdr agent get "$agent" >/dev/null 2>&1; then echo "wt: 旧 agent $agent 未能停止" >&2; return 1; fi
+  fi
+  herdr agent start "$agent" --kind "$kind" --pane "$pane" ${1:+-- "$@"} >/dev/null
+  echo "$pane"
+}
+
 cmd_spawn() {
   NAME=$1; local role=$2 kind=$3 task=$4; shift 4
   [ "${1:-}" = "--" ] && shift
   cmd_new "$NAME" >/dev/null
-  local ws root pane agent out
+  local ws root pane agent out prompt tail
   read -r ws root < <(open_ws "$NAME")
   agent="$NAME-$role"; out="$(wt_path "$NAME")/.agent/$role.md"
-  if pane=$(herdr agent get "$agent" 2>/dev/null | jq -er .result.agent.pane_id); then :  # 已在线，复用
-  else
-    pane=$(free_pane "$ws" "$root")
-    herdr agent start "$agent" --kind "$kind" --pane "$pane" ${1:+-- "$@"} >/dev/null
-  fi
-  local prompt="$task
+  contract="
 
 完成后把结果写入 .agent/$role.md，第一行必须是 'STATUS: ok' 或 'STATUS: fail <原因>'，其后写详细内容。"
+  prompt="$task$contract"
   rm -f "$out"
   for try in 1 2; do
+    pane=$(start_fresh "$agent" "$kind" "$ws" "$root" "$@")
     herdr agent prompt "$agent" "$prompt" --wait --timeout "${WT_TIMEOUT:-600000}" >/dev/null 2>&1 || true
     if [ -f "$out" ] && head -1 "$out" | grep -q '^STATUS: ok'; then
       echo "ok $out"; return 0
     fi
-    [ "$try" = 1 ] && prompt="上一次没有产出合格的 .agent/$role.md。请重做，并务必写该文件。"
+    tail=$(herdr pane read "$pane" --source visible 2>&1 | grep -v '^\s*$' | tail -15)
+    # 新一轮带上原任务和上一轮的失败现场，而不是让旧 agent 续跑
+    prompt="$task
+
+上一轮失败，没有产出合格的 .agent/$role.md。上一轮终端末尾：
+$tail$contract"
   done
   echo "fail agent=$agent pane=$pane (最后输出如下)" >&2
-  herdr pane read "$pane" --source visible 2>&1 | grep -v '^\s*$' | tail -15 >&2
+  echo "$tail" >&2
   return 1
 }
 
