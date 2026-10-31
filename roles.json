@@ -1,0 +1,28 @@
+{
+  "design": {
+    "kind": "claude", "model": "claude-opus-5-5", "effort": "high", "write": true,
+    "when": "frontend, design specs, flowcharts, big-picture planning"
+  },
+  "backend": {
+    "kind": "codex", "model": "gpt-6.1-sol", "effort": "high", "args": ["-s", "workspace-write"], "write": true,
+    "when": "backend implementation"
+  },
+  "review": {
+    "kind": "codex", "model": "gpt-6-astra", "effort": "high", "args": ["-s", "workspace-write"],
+    "write": false, "independent": true,
+    "when": "review and performance; high false-positive rate, pair with triage"
+  },
+  "triage": {
+    "kind": "agy", "model": "gemini-4-argon", "write": false, "independent": true,
+    "when": "filter review findings into real vs false; model id unverified until available in `agy models`"
+  },
+  "ui-drive": {
+    "kind": "codex", "model": "gpt-6.1-terra", "effort": "low", "args": ["-s", "workspace-write"], "write": false,
+    "preamble": "For any browser work, first run `ego-browser skill` and follow its output.",
+    "when": "click through the frontend with the ego-lite browser"
+  },
+  "observe": {
+    "kind": "codex", "model": "gpt-6.1-sol", "effort": "low", "args": ["-s", "workspace-write"], "write": false,
+    "when": "watch backend data state while ui-drive runs"
+  }
+}

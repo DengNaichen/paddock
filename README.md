@@ -9,8 +9,9 @@ Main agent stays on `main` and orchestrates. Isolated work gets a worktree that 
 bin/wt                       worktree + sub-agent CLI (on PATH when the plugin is enabled; needs git, jq, herdr)
 skills/wt                    how to use wt
 skills/herdr-subagents       protocol and verified pitfalls
+roles.json                   role types with pinned runtimes (kind, model, effort, read-only, independence)
 hooks/                       inside herdr, blocks the built-in Agent tool (no effect outside herdr)
-scripts/smoke.sh [kind]      end-to-end check (run inside herdr)
+scripts/smoke.sh [writer] [reviewer]   end-to-end check (run inside herdr)
 AGENT.md / CLAUDE.md         contributor notes; CLAUDE.md just imports AGENT.md
 ```
 
@@ -26,8 +27,8 @@ Requires Claude Code 2.1.91+ (plugin `bin/`).
 ## Use
 
 ```bash
-wt spawn fix-login impl pi "Fix the login redirect and commit."
-wt spawn fix-login review claude "Review git show HEAD."
+wt spawn fix-login backend "Fix the login redirect and commit."
+wt spawn fix-login review "Review git show HEAD."
 wt ls
 wt rm fix-login --yes
 ```

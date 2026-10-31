@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # wt: worktree + herdr agent 流程。
 #   wt new   <name> [base]                      建 worktree 并在 herdr 侧边栏打开
-#   wt spawn <name> <role> <kind> <task> [-- agent 参数...]
-#                                               在该 worktree 里起 agent 做事，校验产物
+#   wt spawn <name> <type> <task>               按 roles.json 的类型在该 worktree 起 agent，校验产物
+#   wt roles [check]                            列出类型；check 对每个类型发真请求验证
 #   wt ls                                       列出 agent
 #   wt rm    <name> [--yes]                     删 worktree（不带 --yes 只预览）
 set -euo pipefail
@@ -36,6 +36,41 @@ free_pane() { # workspace 里没有 agent 的 pane；没有就 split
   herdr pane split "$root" --direction right --cwd "$(wt_path "$NAME")" --no-focus | jq -r '.result.pane.pane_id'
 }
 
+# ---- roles: 类型钉死运行时 ----
+ROLES_DEFAULT="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)/roles.json"
+ROLES_USER="${PADDOCK_ROLES:-$HOME/.config/paddock/roles.json}"
+roles_json() { # 默认值被本机覆盖文件递归合并；数组整体替换
+  if [ -f "$ROLES_USER" ]; then jq -s '.[0] * .[1]' "$ROLES_DEFAULT" "$ROLES_USER"; else cat "$ROLES_DEFAULT"; fi
+}
+role_get() { roles_json | jq -r --arg t "$1" --arg k "$2" '.[$t] | if has($k) then .[$k] | tostring else empty end'; }
+
+runtime_args() { # kind model effort extra... -> 每行一个参数
+  local kind=$1 model=$2 effort=$3; shift 3
+  case $kind in
+    claude) printf '%s\n' --model "$model"; [ -n "$effort" ] && printf '%s\n' --effort "$effort" ;;
+    codex)  printf '%s\n' -m "$model"; [ -n "$effort" ] && printf '%s\n' -c "model_reasoning_effort=\"$effort\"" ;;
+    pi)     printf '%s\n' --model "$model"; [ -n "$effort" ] && printf '%s\n' --thinking "$effort" ;;
+    *)      printf '%s\n' --model "$model" ;;
+  esac
+  [ "$#" -gt 0 ] && printf '%s\n' "$@"
+  return 0
+}
+
+snapshot() { # worktree 的可比较快照，排除 .agent
+  local p=$1
+  { git -C "$p" rev-parse HEAD; git -C "$p" status --porcelain=v1 -uall -- . ':!.agent'; git -C "$p" diff HEAD -- . ':!.agent'; } | shasum | cut -d' ' -f1
+}
+
+check_independent() { # 独立审查：不得与本 worktree 里写代码的 agent 同 kind+model
+  local p=$1 kind=$2 model=$3 f
+  for f in "$p"/.agent/*.runtime; do
+    [ -f "$f" ] || continue
+    if jq -e --arg k "$kind" --arg m "$model" '.write == true and .kind == $k and .model == $m' "$f" >/dev/null; then
+      echo "wt: 独立性检查失败：$kind/$model 与 $(basename "$f" .runtime) 相同，请换模型" >&2; return 1
+    fi
+  done
+}
+
 # 每一轮都起新 agent：先在新 pane 里准备好，再停掉旧的并确认它已退出，最后启动。
 start_fresh() { # start_fresh <agent> <kind> <ws> <root> [agent args...]
   local agent=$1 kind=$2 ws=$3 root=$4; shift 4
@@ -51,21 +86,39 @@ start_fresh() { # start_fresh <agent> <kind> <ws> <root> [agent args...]
   echo "$pane"
 }
 
-cmd_spawn() {
-  NAME=$1; local role=$2 kind=$3 task=$4; shift 4
-  [ "${1:-}" = "--" ] && shift
+cmd_spawn() { # wt spawn <name> <type> "<task>"
+  NAME=$1; local type=$2 task=$3
+  roles_json | jq -e --arg t "$type" '.[$t]' >/dev/null || { echo "wt: 未知类型 ${type}（见 roles.json）" >&2; return 2; }
+  [ "$(role_get "$type" enabled)" = false ] && { echo "wt: 类型 $type 已停用" >&2; return 2; }
+  local kind model effort write indep pre extra=() args=() l
+  kind=$(role_get "$type" kind); model=$(role_get "$type" model); effort=$(role_get "$type" effort)
+  write=$(role_get "$type" write); indep=$(role_get "$type" independent); pre=$(role_get "$type" preamble)
+  while IFS= read -r l; do extra+=("$l"); done < <(roles_json | jq -r --arg t "$type" '.[$t].args // [] | .[]')
+  while IFS= read -r l; do args+=("$l"); done < <(runtime_args "$kind" "$model" "$effort" ${extra[@]+"${extra[@]}"})
+
   cmd_new "$NAME" >/dev/null
-  local ws root pane agent out prompt tail
+  local wp ws root pane agent out prompt tail contract before
+  wp=$(wt_path "$NAME")
+  [ "$indep" = true ] && { check_independent "$wp" "$kind" "$model" || return 3; }
   read -r ws root < <(open_ws "$NAME")
-  agent="$NAME-$role"; out="$(wt_path "$NAME")/.agent/$role.md"
+  agent="$NAME-$type"; out="$wp/.agent/$type.md"
+  mkdir -p "$wp/.agent"
+  jq -n --arg t "$type" --arg k "$kind" --arg m "$model" --argjson w "${write:-true}" \
+    '{type:$t, kind:$k, model:$m, write:$w}' > "$wp/.agent/$type.runtime"
   contract="
 
-完成后把结果写入 .agent/$role.md，第一行必须是 'STATUS: ok' 或 'STATUS: fail <原因>'，其后写详细内容。"
+完成后把结果写入 .agent/$type.md，第一行必须是 'STATUS: ok' 或 'STATUS: fail <原因>'，其后写详细内容。"
+  [ -n "$pre" ] && task="$pre
+
+$task"
   prompt="$task$contract"
-  rm -f "$out"
+  rm -f "$out"; before=$(snapshot "$wp")
   for try in 1 2; do
-    pane=$(start_fresh "$agent" "$kind" "$ws" "$root" "$@")
+    pane=$(start_fresh "$agent" "$kind" "$ws" "$root" ${args[@]+"${args[@]}"})
     herdr agent prompt "$agent" "$prompt" --wait --timeout "${WT_TIMEOUT:-600000}" >/dev/null 2>&1 || true
+    if [ "$write" = false ] && [ "$(snapshot "$wp")" != "$before" ]; then
+      echo "fail agent=${agent}：只读角色 $type 修改了 worktree" >&2; return 4
+    fi
     if [ -f "$out" ] && head -1 "$out" | grep -q '^STATUS: ok'; then
       echo "ok $out"; return 0
     fi
@@ -73,12 +126,27 @@ cmd_spawn() {
     # 新一轮带上原任务和上一轮的失败现场，而不是让旧 agent 续跑
     prompt="$task
 
-上一轮失败，没有产出合格的 .agent/$role.md。上一轮终端末尾：
+上一轮失败，没有产出合格的 .agent/$type.md。上一轮终端末尾：
 $tail$contract"
   done
   echo "fail agent=$agent pane=$pane (最后输出如下)" >&2
   echo "$tail" >&2
   return 1
+}
+
+cmd_roles() { # wt roles [check]
+  if [ "${1:-}" != check ]; then
+    roles_json | jq -r 'to_entries[] | "\(.key)\t\(.value.kind)\t\(.value.model)\t\(.value.effort // "-")\twrite=\(if .value | has("write") then .value.write else true end)\t\(.value.when // "")"'
+    return
+  fi
+  local d t r=0 res; d=$(mktemp -d); export WT_ROOT=$d/wts
+  git init -q -b main "$d/repo" && git -C "$d/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+  for t in $(roles_json | jq -r 'to_entries[] | select(.value.enabled != false) | .key'); do
+    if res=$(cd "$d/repo" && WT_TIMEOUT=${WT_TIMEOUT:-180000} cmd_spawn "chk-$t" "$t" "只回答：写出产物，STATUS: ok，并在第二行写你的模型名。不要做其他事。" 2>&1); then
+      echo "PASS $t"; else echo "FAIL $t: $(echo "$res" | tail -3 | tr '\n' ' ')"; r=1; fi
+    (cd "$d/repo" && cmd_rm "chk-$t" --yes >/dev/null 2>&1) || true
+  done
+  rm -rf "$d"; return $r
 }
 
 cmd_ls() { herdr agent list | jq -r '.result.agents[] | "\(.name // "-")\t\(.agent)\t\(.agent_status)\t\(.pane_id)\t\(.cwd)"'; }
@@ -96,6 +164,6 @@ cmd_rm() {
 
 c=${1:-}; shift || true
 case "$c" in
-  new) cmd_new "$@";; spawn) cmd_spawn "$@";; ls) cmd_ls;; rm) cmd_rm "$@";;
+  new) cmd_new "$@";; spawn) cmd_spawn "$@";; roles) cmd_roles "$@";; ls) cmd_ls;; rm) cmd_rm "$@";;
   *) sed -n '2,7p' "$0"; exit 1;;
 esac
